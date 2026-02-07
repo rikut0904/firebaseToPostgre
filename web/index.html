@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase → PostgreSQL Migration Tool</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="page">
+        <header class="header">
+            <h1>Firebase → PostgreSQL Migration Tool</h1>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="config">設定</button>
+            <button class="tab" data-tab="migration">移行実行</button>
+            <button class="tab" data-tab="schema">スキーマ</button>
+            <button class="tab" data-tab="preview">データプレビュー</button>
+        </nav>
+
+    <!-- Tab 1: Configuration -->
+    <div id="config" class="tab-content active">
+        <div class="section">
+            <h2>Firebase設定</h2>
+            <div class="form-group">
+                <label>ソースタイプ</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="sourceType" value="firestore" checked> Firestore</label>
+                    <label><input type="radio" name="sourceType" value="rtdb"> Realtime DB</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="projectId">プロジェクトID</label>
+                <input type="text" id="projectId" placeholder="my-firebase-project">
+            </div>
+            <div class="form-group">
+                <label for="credentialsJson">認証JSON</label>
+                <div class="credentials-input">
+                    <input type="file" id="credentialsFile" accept=".json">
+                    <textarea id="credentialsJson" rows="4" placeholder="サービスアカウントJSONの内容を貼り付け..."></textarea>
+                </div>
+            </div>
+            <button class="btn btn-secondary" onclick="Config.testFirebase()">接続テスト</button>
+            <span id="firebaseTestResult" class="test-result"></span>
+        </div>
+
+        <div class="section">
+            <h2>PostgreSQL設定</h2>
+            <div class="form-group">
+                <label for="pgUrl">DATABASE_URL（任意）</label>
+                <input type="text" id="pgUrl" placeholder="postgresql://...（空でも可）">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pgHost">ホスト</label>
+                    <input type="text" id="pgHost" value="localhost">
+                </div>
+                <div class="form-group" style="width:120px">
+                    <label for="pgPort">ポート</label>
+                    <input type="number" id="pgPort" value="5432">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="pgDatabase">データベース</label>
+                <input type="text" id="pgDatabase" placeholder="myapp">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="pgUser">ユーザー</label>
+                    <input type="text" id="pgUser" value="postgres">
+                </div>
+                <div class="form-group">
+                    <label for="pgPassword">パスワード</label>
+                    <input type="password" id="pgPassword">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="pgSslmode">SSLモード</label>
+                <select id="pgSslmode">
+                    <option value="disable">disable</option>
+                    <option value="allow">allow</option>
+                    <option value="prefer" selected>prefer</option>
+                    <option value="require">require</option>
+                    <option value="verify-ca">verify-ca</option>
+                    <option value="verify-full">verify-full</option>
+                </select>
+            </div>
+            <button class="btn btn-secondary" onclick="Config.testPostgres()">接続テスト</button>
+            <span id="postgresTestResult" class="test-result"></span>
+        </div>
+
+        <div class="section">
+            <h2>マッピング設定</h2>
+            <div class="btn-group" style="margin-bottom:12px">
+                <button class="btn btn-secondary" onclick="Config.fetchCollections()">コレクション取得</button>
+                <button class="btn btn-secondary" id="btnAIMapping" onclick="Config.generateMappingsAI()">AIでマッピング生成</button>
+                <button class="btn btn-primary" onclick="Config.addMapping()">+ マッピング追加</button>
+            </div>
+            <div id="aiMappingStatus" class="status-text"></div>
+            <datalist id="collectionList"></datalist>
+            <div id="mappings-container"></div>
+        </div>
+
+        <div class="section">
+            <h2>オプション</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="batchSize">バッチサイズ</label>
+                    <input type="number" id="batchSize" value="500" min="1" max="10000">
+                </div>
+                <div class="form-group">
+                    <label for="parallelism">並列数</label>
+                    <input type="number" id="parallelism" value="3" min="1" max="20">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="errorStrategy">エラー戦略</label>
+                    <select id="errorStrategy">
+                        <option value="continue">continue (続行)</option>
+                        <option value="stop">stop (停止)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="errorLimit">エラー上限</label>
+                    <input type="number" id="errorLimit" value="100" min="0">
+                </div>
+            </div>
+        </div>
+
+        <div class="section actions">
+            <div class="form-row">
+                <div class="form-group" style="width:200px">
+                    <label for="configName">設定名</label>
+                    <input type="text" id="configName" placeholder="my-migration">
+                </div>
+                <div class="form-group btn-group" style="padding-top:24px">
+                    <button class="btn btn-primary" onclick="Config.save()">設定を保存</button>
+                    <button class="btn btn-secondary" onclick="Config.showLoadDialog()">設定を読込</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 2: Migration -->
+    <div id="migration" class="tab-content">
+        <div class="section">
+            <h2>移行コントロール</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label><input type="checkbox" id="dryRun"> ドライラン</label>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary btn-lg" id="btnStart" onclick="Migration.start()">移行開始</button>
+                <button class="btn btn-danger btn-lg" id="btnStop" onclick="Migration.stop()" disabled>停止</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>進捗</h2>
+            <div id="progress-container">
+                <p class="placeholder">移行を開始すると進捗が表示されます</p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>ログ</h2>
+            <div id="log-container" class="log-area"></div>
+            <button class="btn btn-secondary btn-sm" onclick="Migration.clearLogs()">Clear</button>
+        </div>
+    </div>
+
+    <!-- Tab 3: Schema Preview -->
+    <div id="schema" class="tab-content">
+        <div class="section">
+            <h2>スキーマプレビュー</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="schemaMappingSelect">マッピング</label>
+                    <select id="schemaMappingSelect"></select>
+                </div>
+                <div class="form-group" style="padding-top:24px">
+                    <button class="btn btn-primary" onclick="Schema.generate()">DDL生成</button>
+                </div>
+            </div>
+            <div id="schema-output">
+                <pre id="ddlOutput" class="code-block"></pre>
+            </div>
+            <div class="btn-group" style="margin-top:12px">
+                <button class="btn btn-secondary" onclick="Schema.copyDDL()">DDLをコピー</button>
+                <button class="btn btn-primary" onclick="Schema.executeDDL()">DDLを実行</button>
+            </div>
+            <span id="schemaExecResult" class="test-result"></span>
+        </div>
+    </div>
+
+    <!-- Tab 4: Data Preview -->
+    <div id="preview" class="tab-content">
+        <div class="section">
+            <h2>データプレビュー</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="previewCollection">コレクション</label>
+                    <input type="text" id="previewCollection" placeholder="users">
+                </div>
+                <div class="form-group" style="width:80px">
+                    <label for="previewLimit">件数</label>
+                    <input type="number" id="previewLimit" value="5" min="1" max="100">
+                </div>
+                <div class="form-group" style="padding-top:24px">
+                    <button class="btn btn-primary" onclick="Preview.fetch()">プレビュー取得</button>
+                </div>
+            </div>
+
+            <div id="preview-container">
+                <p class="placeholder">コレクション名を入力してプレビューを取得</p>
+            </div>
+
+            <div id="preview-nav" class="preview-nav" style="display:none">
+                <button class="btn btn-secondary btn-sm" onclick="Preview.prev()">← 前へ</button>
+                <span id="previewIndex">1/1</span>
+                <button class="btn btn-secondary btn-sm" onclick="Preview.next()">次へ →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load Config Dialog -->
+    <div id="loadDialog" class="modal" style="display:none">
+        <div class="modal-content">
+            <h3>設定を読み込む</h3>
+            <div id="configList"></div>
+            <button class="btn btn-secondary" onclick="Config.closeLoadDialog()">閉じる</button>
+        </div>
+    </div>
+
+        <script src="/js/app.js"></script>
+        <script src="/js/config.js"></script>
+        <script src="/js/migration.js"></script>
+        <script src="/js/schema.js"></script>
+        <script src="/js/preview.js"></script>
+    </div>
+</body>
+</html>
