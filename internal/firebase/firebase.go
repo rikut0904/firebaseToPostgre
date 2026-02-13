@@ -3,12 +3,15 @@ package firebase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go/v4"
@@ -246,6 +249,8 @@ func ListSubcollections(ctx context.Context, conn ConnInfo, parentCollection str
 	if sample <= 0 {
 		sample = 20
 	}
+	start := time.Now()
+	log.Printf("list subcollections start: project=%s collection=%s sample=%d", conn.ProjectID, parentCollection, sample)
 
 	opt := option.WithCredentialsJSON([]byte(conn.CredentialsJSON))
 	client, err := firestore.NewClient(ctx, conn.ProjectID, opt)
@@ -264,6 +269,9 @@ func ListSubcollections(ctx context.Context, conn ConnInfo, parentCollection str
 			break
 		}
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				log.Printf("list subcollections context done: project=%s collection=%s elapsed=%s err=%v", conn.ProjectID, parentCollection, time.Since(start), err)
+			}
 			return nil, fmt.Errorf("list documents: %w", err)
 		}
 		subIter := doc.Ref.Collections(ctx)
@@ -273,6 +281,9 @@ func ListSubcollections(ctx context.Context, conn ConnInfo, parentCollection str
 				break
 			}
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+					log.Printf("list subcollections context done: project=%s collection=%s elapsed=%s err=%v", conn.ProjectID, parentCollection, time.Since(start), err)
+				}
 				return nil, fmt.Errorf("list subcollections: %w", err)
 			}
 			seen[sub.ID] = struct{}{}
@@ -284,6 +295,7 @@ func ListSubcollections(ctx context.Context, conn ConnInfo, parentCollection str
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	log.Printf("list subcollections done: project=%s collection=%s elapsed=%s subcount=%d", conn.ProjectID, parentCollection, time.Since(start), len(names))
 	return names, nil
 }
 

@@ -3,7 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"firebaseToPostgre/internal/ai"
@@ -122,35 +125,41 @@ func (s *Server) handleCollectionsTree(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
+	log.Printf("collections tree list collections start: project=%s source=%s", req.Firebase.ProjectID, req.Firebase.SourceType)
 	collections, err := firebase.ListCollections(ctx, req.Firebase)
 	if err != nil {
+		log.Printf("collections tree list collections failed: project=%s source=%s err=%v", req.Firebase.ProjectID, req.Firebase.SourceType, err)
 		jsonError(w, http.StatusInternalServerError, "list collections: "+err.Error())
 		return
 	}
+	log.Printf("collections tree list collections done: project=%s count=%d", req.Firebase.ProjectID, len(collections))
 
 	subMap := make(map[string][]string)
 	for _, parent := range collections {
+		start := time.Now()
 		subs, err := firebase.ListSubcollections(ctx, req.Firebase, parent, req.SampleSize)
 		if err != nil {
+			log.Printf("collections tree list subcollections failed: project=%s collection=%s sample=%d elapsed=%s err=%v", req.Firebase.ProjectID, parent, req.SampleSize, time.Since(start), err)
 			jsonError(w, http.StatusInternalServerError, "list subcollections: "+err.Error())
 			return
 		}
+		log.Printf("collections tree list subcollections done: project=%s collection=%s sample=%d elapsed=%s subcount=%d", req.Firebase.ProjectID, parent, req.SampleSize, time.Since(start), len(subs))
 		if len(subs) > 0 {
 			subMap[parent] = subs
 		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"collections":   collections,
+		"collections":    collections,
 		"subcollections": subMap,
 	})
 }
 
 func (s *Server) handleAIMappings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Firebase    firebase.ConnInfo `json:"firebase"`
-		SampleSize  int               `json:"sampleSize"`
-		MaxCollections int            `json:"maxCollections"`
+		Firebase       firebase.ConnInfo `json:"firebase"`
+		SampleSize     int               `json:"sampleSize"`
+		MaxCollections int               `json:"maxCollections"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -163,25 +172,32 @@ func (s *Server) handleAIMappings(w http.ResponseWriter, r *http.Request) {
 		req.MaxCollections = 20
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	totalTimeout := durationFromEnv("AI_MAPPINGS_TIMEOUT_SEC", 300*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), totalTimeout)
 	defer cancel()
 
+	log.Printf("ai mappings list collections start: project=%s source=%s", req.Firebase.ProjectID, req.Firebase.SourceType)
 	collections, err := firebase.ListCollections(ctx, req.Firebase)
 	if err != nil {
+		log.Printf("ai mappings list collections failed: project=%s source=%s err=%v", req.Firebase.ProjectID, req.Firebase.SourceType, err)
 		jsonError(w, http.StatusInternalServerError, "list collections: "+err.Error())
 		return
 	}
 	if len(collections) > req.MaxCollections {
 		collections = collections[:req.MaxCollections]
 	}
+	log.Printf("ai mappings list collections done: project=%s count=%d max=%d", req.Firebase.ProjectID, len(collections), req.MaxCollections)
 
 	subMap := make(map[string][]string)
 	for _, parent := range collections {
+		start := time.Now()
 		subs, err := firebase.ListSubcollections(ctx, req.Firebase, parent, 20)
 		if err != nil {
+			log.Printf("ai mappings list subcollections failed: project=%s collection=%s sample=%d elapsed=%s err=%v", req.Firebase.ProjectID, parent, 20, time.Since(start), err)
 			jsonError(w, http.StatusInternalServerError, "list subcollections: "+err.Error())
 			return
 		}
+		log.Printf("ai mappings list subcollections done: project=%s collection=%s sample=%d elapsed=%s subcount=%d", req.Firebase.ProjectID, parent, 20, time.Since(start), len(subs))
 		if len(subs) > 0 {
 			subMap[parent] = subs
 		}
@@ -250,15 +266,34 @@ func (s *Server) handleAIMappings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	mappings, err := ai.GenerateMappings(ctx, ai.GenerateInput{Hints: hints})
+	aiTimeout := durationFromEnv("OPENAI_TIMEOUT_SEC", 180*time.Second)
+	aiCtx, aiCancel := context.WithTimeout(r.Context(), aiTimeout)
+	defer aiCancel()
+	log.Printf("ai mappings openai call start: project=%s timeout=%s", req.Firebase.ProjectID, aiTimeout)
+	aiStart := time.Now()
+	mappings, err := ai.GenerateMappings(aiCtx, ai.GenerateInput{Hints: hints})
 	if err != nil {
+		log.Printf("ai mappings openai call failed: project=%s elapsed=%s err=%v", req.Firebase.ProjectID, time.Since(aiStart), err)
 		jsonError(w, http.StatusInternalServerError, "openai: "+err.Error())
 		return
 	}
+	log.Printf("ai mappings openai call done: project=%s elapsed=%s", req.Firebase.ProjectID, time.Since(aiStart))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"mappings": mappings,
 	})
+}
+
+func durationFromEnv(name string, fallback time.Duration) time.Duration {
+	v := os.Getenv(name)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return time.Duration(n) * time.Second
 }
 
 func (s *Server) handleMigrate(w http.ResponseWriter, r *http.Request) {
@@ -292,9 +327,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Firebase    firebase.ConnInfo `json:"firebase"`
-		Collection  string            `json:"collection"`
-		Limit       int               `json:"limit"`
+		Firebase   firebase.ConnInfo `json:"firebase"`
+		Collection string            `json:"collection"`
+		Limit      int               `json:"limit"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())

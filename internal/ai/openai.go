@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"firebaseToPostgre/internal/migration"
@@ -22,10 +23,10 @@ type MappingHint struct {
 }
 
 type MappingHints struct {
-	ProjectID      string        `json:"projectId"`
-	Collections    []string      `json:"collections"`
+	ProjectID      string              `json:"projectId"`
+	Collections    []string            `json:"collections"`
 	Subcollections map[string][]string `json:"subcollections"`
-	Hints          []MappingHint `json:"hints"`
+	Hints          []MappingHint       `json:"hints"`
 }
 
 type GenerateInput struct {
@@ -79,20 +80,20 @@ func GenerateMappings(ctx context.Context, input GenerateInput) ([]migration.Col
 							"items": map[string]interface{}{
 								"type": "object",
 								"properties": map[string]interface{}{
-									"name": map[string]interface{}{"type": "string"},
+									"name":             map[string]interface{}{"type": "string"},
 									"sourceCollection": map[string]interface{}{"type": "string"},
-									"targetTable": map[string]interface{}{"type": "string"},
-									"createTable": map[string]interface{}{"type": "boolean"},
+									"targetTable":      map[string]interface{}{"type": "string"},
+									"createTable":      map[string]interface{}{"type": "boolean"},
 									"columns": map[string]interface{}{
 										"type": "array",
 										"items": map[string]interface{}{
 											"type": "object",
 											"properties": map[string]interface{}{
-												"source": map[string]interface{}{"type": "string"},
-												"target": map[string]interface{}{"type": "string"},
-												"type": map[string]interface{}{"type": "string"},
+												"source":     map[string]interface{}{"type": "string"},
+												"target":     map[string]interface{}{"type": "string"},
+												"type":       map[string]interface{}{"type": "string"},
 												"primaryKey": map[string]interface{}{"type": "boolean"},
-												"nullable": map[string]interface{}{"type": "boolean"},
+												"nullable":   map[string]interface{}{"type": "boolean"},
 											},
 											"required":             []string{"source", "target", "type", "primaryKey", "nullable"},
 											"additionalProperties": false,
@@ -119,7 +120,7 @@ func GenerateMappings(ctx context.Context, input GenerateInput) ([]migration.Col
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 45 * time.Second}
+	client := &http.Client{Timeout: durationFromEnv("OPENAI_HTTP_TIMEOUT_SEC", 180*time.Second)}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -180,4 +181,16 @@ func readPrompt() (string, error) {
 		}
 	}
 	return "", errors.New("prompt/ai-mapping.md not found")
+}
+
+func durationFromEnv(name string, fallback time.Duration) time.Duration {
+	v := os.Getenv(name)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return time.Duration(n) * time.Second
 }
